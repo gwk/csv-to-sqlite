@@ -1,5 +1,5 @@
 {
-  'cmd': '$PROJ/csv-to-sqlite.py $NAME.csv -table=t',
+  'cmd': '$PROJ/csv-to-sqlite.py $NAME.csv t',
   'err-val': 'error: empty csv input.\n',
   'links': { '$STEM.csv' }
 }

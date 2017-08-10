@@ -1,8 +1,5 @@
 {
-  'compile': [
-    '$PROJ/csv-to-sqlite.py join_l.csv -table=l -o $NAME.sqlite',
-    '$PROJ/csv-to-sqlite.py join_r.csv -table=r -o $NAME.sqlite',
-  ],
+  'compile': ['$PROJ/csv-to-sqlite.py join_l.csv l join_r.csv r -o $NAME.sqlite'],
   'cmd': ['sqlite3', '$NAME.sqlite',
     'SELECT l.id, lower, upper FROM l INNER JOIN r ON l.id =r.id'],
   'links': {

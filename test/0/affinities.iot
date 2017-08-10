@@ -1,5 +1,5 @@
 {
-  'compile': ['$PROJ/csv-to-sqlite.py $NAME.csv -table=t -o $NAME.sqlite'],
+  'compile': ['$PROJ/csv-to-sqlite.py $NAME.csv t -o $NAME.sqlite'],
   'cmd': 'sqlite3 $NAME.sqlite "SELECT * FROM t"',
   'links': { '$STEM.csv' },
   'out-val': '''\

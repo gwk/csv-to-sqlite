@@ -31,55 +31,56 @@ Additionally, SQLite has a loadable extension called the CSV Virtual table: http
 '''
 TODO:
 * `-append` option to not drop existing tables?
-* `-columns` override.
-* `-no-header` requires `-columns` option.
+* columns:
+  parser.add_argument('-columns', nargs='+', help='manually specify columns names.')
+  parser.add_argument('-no-header', dest='has_header', action='store_false',
+    help='Specify that the input CSV has no header row.')
 '''
 
 
 def main():
   dialects = csv.list_dialects()
   parser = ArgumentParser(prog='csv-to-sqlite', description=description, epilog=epilog)
-  parser.add_argument('-table', required=True, help='the name of the table to create')
   parser.add_argument('-output', default=None,
     help='path to the new or existing SQLite database (omit for a temporary in-memory DB)')
   parser.add_argument('-dialect', default='excel', help=f'the CSV dialect to use {dialects}')
-  parser.add_argument('-no-header', dest='has_header', action='store_false',
-    help='Specify that the input CSV has no header row')
-  parser.add_argument('-columns', nargs='+', help='Manually specify columns names')
-  parser.add_argument('csv', nargs='?')
+  parser.add_argument('csv_table_pairs', nargs='+',
+    help='consecutive pairs of (csv_path, table_name).')
 
   args = parser.parse_args()
-
-  if not args.csv: exit('error: stdin not yet supported.')
-  if not args.has_header: exit('error: -no-header not yet supported.')
-  if args.columns: exit('error: -columns not yet supported.')
 
   dialect = args.dialect
   if dialect not in dialects:
     exit(f'error: invalid CSV dialect: {dialect!r}.')
 
-  table = args.table
+  if len(args.csv_table_pairs) % 2 != 0:
+    exit(f'error: csv_path and table_name arguments must be specified in pairs.')
+
+  db = DB(args.output)
+  pairs = args.csv_table_pairs
+  for csv_path, table in zip(pairs[0::2], pairs[1::2]):
+    load_table(db=db, csv_path=csv_path, table=table, dialect=dialect)
+
+  if not args.output:
+    db.interactive_session()
+
+
+def load_table(db, csv_path, table, dialect):
   validate_sym(table, 'table name')
 
-  try: f = open(args.csv, newline='') # newline arg is recommended by csv.reader docs.
+  try: f = open(csv_path, newline='') # newline arg is recommended by csv.reader docs.
   except FileNotFoundError as e: exit(e)
 
   # Infer column affinities (SQLite terminology for weak types).
-
   header, reader = header_reader_for(f, dialect)
   columns = infer_columns(header, reader)
   errSL('schema:', *[f'{n}:{a}' for n, a in columns])
 
-  # Read the file again, this time inserting the rows.
+  # Read the file again and insert the rows.
   f.seek(0)
   header, reader = header_reader_for(f, dialect)
-
-  db = DB(args.output)
   db.drop_and_create_table(table, columns)
   db.insert_rows(table, header, reader)
-
-  if not args.output:
-    db.interactive_session()
 
 
 def header_reader_for(f, dialect):
