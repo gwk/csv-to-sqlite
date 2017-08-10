@@ -1,0 +1,9 @@
+{
+  'cmd': '$PROJ/csv-to-sqlite.py $NAME.csv -table=t',
+  'err-val': '''\
+error: row 2 has 3 cells: ['1', '2', '3']
+error: row 3 has 3 cells: ['4', '5', '6']
+''',
+  'links': { '$STEM.csv' }
+}
+
