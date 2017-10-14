@@ -7,7 +7,9 @@ assert sys.version_info >= (3, 6, 0)
 import csv
 import re
 import readline # by importing this module, `input` function gains history capabilities.
+import sqlite3
 from argparse import ArgumentParser
+from collections import Counter
 from sqlite3 import Cursor, connect, complete_statement as is_complete_sqlite_statement
 from sys import stdin, stdout, stderr
 from typing import *
@@ -58,6 +60,8 @@ def main():
 
   db = DB(args.output)
   pairs = args.csv_table_pairs
+  if len(pairs) % 2:
+    exit(f'error: uneven number of (csv_path, table_name) pairs.')
   for csv_path, table in zip(pairs[0::2], pairs[1::2]):
     load_table(db=db, csv_path=csv_path, table=table, dialect=dialect)
 
@@ -66,24 +70,34 @@ def main():
 
 
 def load_table(db, csv_path, table, dialect):
-  validate_sym(table, 'table name')
+  table = clean_sym(table, 'table name')
 
   try: f = open(csv_path, newline='') # newline arg is recommended by csv.reader docs.
   except FileNotFoundError as e: exit(e)
 
+  # If a UTF8 BOM is present, remove it; for now we assume UTF8.
+  # The UTF8 BOM is '\uFEFF' / b'\xef\xbb\xbf'.
+  # Note that TextIOWrapper.read parameter units are in characters, but `seek` and `tell` are in bytes.
+  lead_char = f.read(1)
+  if lead_char == '\uFEFF':
+    start_offset = f.tell()
+  else:
+    start_offset = 0
+    f.seek(0)
+
   # Infer column affinities (SQLite terminology for weak types).
-  header, reader = header_reader_for(f, dialect)
-  columns = infer_columns(header, reader)
-  errSL('schema:', *[f'{n}:{a}' for n, a in columns])
+  header, reader = header_reader(f, dialect)
+  col_names, columns = infer_columns(header, reader)
+  errSL(f'{table} schema:', *[f'{n}:{a}' for n, a in columns])
 
   # Read the file again and insert the rows.
-  f.seek(0)
-  header, reader = header_reader_for(f, dialect)
+  f.seek(start_offset)
+  _, reader = header_reader(f, dialect)
   db.drop_and_create_table(table, columns)
-  db.insert_rows(table, header, reader)
+  db.insert_rows(table, col_names, reader)
 
 
-def header_reader_for(f, dialect):
+def header_reader(f, dialect):
   reader = csv.reader(f, dialect=dialect)
   try: header = next(reader)
   except StopIteration: exit('error: empty csv input.')
@@ -91,11 +105,21 @@ def header_reader_for(f, dialect):
 
 
 def infer_columns(header, reader):
-  for name in header:
-    validate_sym(name, 'column name')
 
-  col_count = len(header)
-  column_states = [S_NONE for _ in header]
+  used_names = set()
+  def unique_name(name):
+    s = clean_sym(name, 'column name')
+    i = 0
+    si = s # omit index for 0 case.
+    while si.lower() in used_names:
+      i += 1
+      si = f'{s}_{i}'
+    used_names.add(si.lower())
+    return si
+
+  col_names = [unique_name(name) for name in header]
+  col_count = len(col_names)
+  column_states = [S_NONE for _ in col_names]
 
   bad_rows = False
   for i, row in enumerate(reader, 1):
@@ -107,7 +131,7 @@ def infer_columns(header, reader):
       column_states[i] = state_for(state, cell)
   if bad_rows: exit(1)
   affinities = [column_state_affinities[state] for state in column_states]
-  return tuple(zip(header, affinities))
+  return col_names, tuple(zip(col_names, affinities))
 
 
 def state_for(state, cell):
@@ -146,11 +170,14 @@ class DB:
     self.run(f'DROP TABLE IF EXISTS {table}')
     self.run(f'CREATE TABLE IF NOT EXISTS {table} ({columns_decl})')
 
-  def insert_rows(self, table, header, reader):
-    names = ', '.join(header)
-    placeholders = ', '.join('?' for _ in header)
+  def insert_rows(self, table, col_names, reader):
+    names = ', '.join(col_names)
+    placeholders = ', '.join('?' for _ in col_names)
     insert_stmt = f'INSERT INTO {table} ({names}) values ({placeholders})'
-    self.conn.executemany(insert_stmt, reader)
+    try: self.conn.executemany(insert_stmt, reader)
+    except Exception:
+      errSL(insert_stmt)
+      raise
 
 
   def interactive_session(self):
@@ -164,31 +191,158 @@ class DB:
 
     buffer = ''
     while True:
-      try: line = input('> ')
+      try:
+        line = input('> ')
+        buffer += line
+        if is_complete_sqlite_statement(buffer):
+          execute(buffer.strip())
+          buffer = ''
+      except KeyboardInterrupt:
+        print('^KeyboardInterrupt')
       except EOFError:
         print()
         return
-      buffer += line
-      if is_complete_sqlite_statement(buffer):
-        execute(buffer.strip())
-        buffer = ''
 
 
-def validate_sym(sym, desc):
-  if not sym_re.fullmatch(sym):
-    exit(f'{desc} is not a valid SQLite identifier: {sym!r}')
-  if sym.lower() in sqlite_reserved_names:
-      exit(f'{desc} is a reserved SQLite identifier: {sym!r}')
+def clean_sym(sym, desc):
+  orig = sym
+  sym = sym_re.sub('_', sym)
+  if not sym: sym = '_'
+  if sym[0].isnumeric(): sym = '_' + sym
+  if sym != orig: errSL(f'note: {desc} converted from {orig!r} to {sym!r}')
+  return sym
 
-sym_re = re.compile(r'\w+') # TODO: exact sqlite syntax.
+sym_re = re.compile(r'[^\w]', flags=re.ASCII)
 
-sqlite_reserved_names = {
-  'table',
-  'values'
-  # TODO: add the rest.
+sqlite_keywords = {
+  'ABORT',
+  'ACTION',
+  'ADD',
+  'AFTER',
+  'ALL',
+  'ALTER',
+  'ANALYZE',
+  'AND',
+  'AS',
+  'ASC',
+  'ATTACH',
+  'AUTOINCREMENT',
+  'BEFORE',
+  'BEGIN',
+  'BETWEEN',
+  'BY',
+  'CASCADE',
+  'CASE',
+  'CAST',
+  'CHECK',
+  'COLLATE',
+  'COLUMN',
+  'COMMIT',
+  'CONFLICT',
+  'CONSTRAINT',
+  'CREATE',
+  'CROSS',
+  'CURRENT_DATE',
+  'CURRENT_TIME',
+  'CURRENT_TIMESTAMP',
+  'DATABASE',
+  'DEFAULT',
+  'DEFERRABLE',
+  'DEFERRED',
+  'DELETE',
+  'DESC',
+  'DETACH',
+  'DISTINCT',
+  'DROP',
+  'EACH',
+  'ELSE',
+  'END',
+  'ESCAPE',
+  'EXCEPT',
+  'EXCLUSIVE',
+  'EXISTS',
+  'EXPLAIN',
+  'FAIL',
+  'FOR',
+  'FOREIGN',
+  'FROM',
+  'FULL',
+  'GLOB',
+  'GROUP',
+  'HAVING',
+  'IF',
+  'IGNORE',
+  'IMMEDIATE',
+  'IN',
+  'INDEX',
+  'INDEXED',
+  'INITIALLY',
+  'INNER',
+  'INSERT',
+  'INSTEAD',
+  'INTERSECT',
+  'INTO',
+  'IS',
+  'ISNULL',
+  'JOIN',
+  'KEY',
+  'LEFT',
+  'LIKE',
+  'LIMIT',
+  'MATCH',
+  'NATURAL',
+  'NO',
+  'NOT',
+  'NOTNULL',
+  'NULL',
+  'OF',
+  'OFFSET',
+  'ON',
+  'OR',
+  'ORDER',
+  'OUTER',
+  'PLAN',
+  'PRAGMA',
+  'PRIMARY',
+  'QUERY',
+  'RAISE',
+  'RECURSIVE',
+  'REFERENCES',
+  'REGEXP',
+  'REINDEX',
+  'RELEASE',
+  'RENAME',
+  'REPLACE',
+  'RESTRICT',
+  'RIGHT',
+  'ROLLBACK',
+  'ROW',
+  'SAVEPOINT',
+  'SELECT',
+  'SET',
+  'TABLE',
+  'TEMP',
+  'TEMPORARY',
+  'THEN',
+  'TO',
+  'TRANSACTION',
+  'TRIGGER',
+  'UNION',
+  'UNIQUE',
+  'UPDATE',
+  'USING',
+  'VACUUM',
+  'VALUES',
+  'VIEW',
+  'VIRTUAL',
+  'WHEN',
+  'WHERE',
+  'WITH',
+  'WITHOUT',
 }
 
 
 def errSL(*args): print(*args, file=stderr)
+
 
 if __name__ == '__main__': main()

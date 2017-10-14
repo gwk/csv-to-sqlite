@@ -23,4 +23,4 @@ test:
 	iotest -fail-fast
 
 typecheck:
-	mypy-plumage csv-to-sqlite.py
+	craft-py-check csv-to-sqlite.py
