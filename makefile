@@ -19,6 +19,12 @@ cov:
 install:
 	sudo cp csv-to-sqlite.py /usr/local/bin/csv-to-sqlite
 
+install-link:
+	sudo ln -s $$PWD/csv-to-sqlite.py /usr/local/bin/csv-to-sqlite
+
+uninstall:
+	sudo rm /usr/local/bin/csv-to-sqlite
+
 test:
 	iotest -fail-fast
 
