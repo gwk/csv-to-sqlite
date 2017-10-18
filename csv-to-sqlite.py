@@ -10,7 +10,7 @@ import readline # by importing this module, `input` function gains history capab
 import sqlite3
 from argparse import ArgumentParser
 from collections import Counter
-from sqlite3 import Cursor, connect, complete_statement as is_complete_sqlite_statement
+from sqlite3 import Cursor, OperationalError, connect, complete_statement as is_complete_sqlite_statement
 from sys import stdin, stdout, stderr
 from typing import *
 
@@ -58,10 +58,18 @@ def main():
   if len(args.csv_table_pairs) % 2 != 0:
     exit(f'error: csv_path and table_name arguments must be specified in pairs.')
 
-  db = DB(args.output)
+  try: db = DB(args.output)
+  except OperationalError as e:
+    if e.args[0] in {'unable to open database file'}:
+      exit(f'error: {args.output}: {e.args[0]}.')
+    raise #!cov-ignore.
+
   pairs = args.csv_table_pairs
   if len(pairs) % 2:
     exit(f'error: uneven number of (csv_path, table_name) pairs.')
+
+  db.enable_wal_mode()
+
   for csv_path, table in zip(pairs[0::2], pairs[1::2]):
     load_table(db=db, csv_path=csv_path, table=table, dialect=dialect)
 
@@ -88,7 +96,7 @@ def load_table(db, csv_path, table, dialect):
   # Infer column affinities (SQLite terminology for weak types).
   header, reader = header_reader(f, dialect)
   col_names, columns = infer_columns(header, reader)
-  errSL(f'{table} schema:', *[f'{n}:{a}' for n, a in columns])
+  errSL(f'schema for `{table}`:', *[f'{n}:{a}' for n, a in columns])
 
   # Read the file again and insert the rows.
   f.seek(start_offset)
@@ -163,6 +171,9 @@ class DB:
 
   def run(self, query: str, *qmark_args, **named_args: Any) -> Cursor:
     return self.conn.execute(query, qmark_args or named_args)
+
+  def enable_wal_mode(self):
+    self.run('PRAGMA journal_mode=WAL')
 
   def drop_and_create_table(self, table, columns):
     #db_columns = (('id', 'INTEGER PRIMARY KEY'),) + columns
