@@ -4,7 +4,10 @@
 import sys
 assert sys.version_info >= (3, 6, 0)
 
+import bz2
 import csv
+import gzip
+import lzma
 import re
 import readline # by importing this module, `input` function gains history capabilities.
 import sqlite3
@@ -78,11 +81,20 @@ def main():
 
 
 def load_table(db, csv_path, table, dialect):
-  table = clean_sym(table, 'table name')
 
-  try: f = open(csv_path, newline='') # newline arg is recommended by csv.reader docs.
+  try:
+    # Note: newline='' arg is recommended by csv.reader docs.
+    if csv_path.endswith('.bz2'):
+      f = bz2.open(csv_path, mode='rt', newline='')
+    elif csv_path.endswith('.gz'):
+      f = gzip.open(csv_path, mode='rt', newline='')
+    elif csv_path.endswith('.xz'):
+      f = lzma.open(csv_path, mode='rt', newline='')
+    else:
+      f = open(csv_path, newline='')
   except FileNotFoundError as e: exit(e)
 
+  table = clean_sym(table, 'table name')
   # If a UTF8 BOM is present, remove it; for now we assume UTF8.
   # The UTF8 BOM is '\uFEFF' / b'\xef\xbb\xbf'.
   # Note that TextIOWrapper.read parameter units are in characters, but `seek` and `tell` are in bytes.
