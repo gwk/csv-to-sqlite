@@ -71,7 +71,8 @@ def main():
   if len(pairs) % 2:
     exit(f'error: uneven number of (csv_path, table_name) pairs.')
 
-  db.enable_wal_mode()
+  db.enable_wal_mode() # speedup.
+  db.set_synchronous_mode(False) # major speedup; database might be corrupt if the process fails.
 
   for csv_path, table in zip(pairs[0::2], pairs[1::2]):
     load_table(db=db, csv_path=csv_path, table=table, dialect=dialect)
@@ -182,10 +183,14 @@ class DB:
     self.conn.isolation_level = None # autocommit mode.
 
   def run(self, query: str, *qmark_args, **named_args: Any) -> Cursor:
+    assert not (qmark_args and named_args)
     return self.conn.execute(query, qmark_args or named_args)
 
   def enable_wal_mode(self):
     self.run('PRAGMA journal_mode=WAL')
+
+  def set_synchronous_mode(self, enabled):
+    self.run(f'PRAGMA synchronous={"ON" if enabled else "OFF"}')
 
   def drop_and_create_table(self, table, columns):
     #db_columns = (('id', 'INTEGER PRIMARY KEY'),) + columns
